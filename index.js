@@ -10,18 +10,45 @@ module.exports = function (homebridge) {
 
   homebridge.registerPlatform("homebridge-opensprinkler", "OpenSprinkler", SprinklerPlatform);
 };
- 
-function SprinklerPlatform(log, config, api) {
-  var self = this
-  console.log("its a me")
-  this.log = log;
-  this.name = "Test valve"
-  this.config = config;
-  this.api = api;
-  this.statusUrl = "http://" + config.host + "/ja?pw=" + config.password.md5;
-  this.pollIntervalMs = config.pollIntervalMs || 5000;
 
-  this.poll = function() {
+class SprinklerPlatform {
+  constructor(log, config, api) {
+    let self = this
+    console.log("its a me")
+    this.log = log;
+    this.name = "Test valve"
+    this.config = config;
+    this.api = api;
+    this.statusUrl = "http://" + config.host + "/ja?pw=" + config.password.md5;
+    this.pollIntervalMs = config.pollIntervalMs || 5000;
+
+    this.accessories = function (next) {
+      request({url: self.statusUrl}, function(error, response, body) {
+        self.log("response")
+        if (error != null) {
+          self.log("ERROR!")
+          self.log(error)
+          next([]);
+        } else {
+          let json = JSON.parse(body)
+          let names = json.stations.snames
+          self.log(names)
+          self.valves = config.valves.map(function (valveIndex) {
+            let sprinkler = new SprinklerStation(log, config, names[valveIndex], valveIndex)
+            sprinkler.updateState(json.settings.ps[valveIndex]);
+            return(sprinkler)
+          });
+          self.rainDelay = new RainDelay(log, config)
+          self.poll();
+
+          next(self.valves.concat([self.rainDelay]));
+        }
+      });
+    }
+  }
+
+  poll() {
+    let self = this
     setTimeout(function() {
       request({url: self.statusUrl}, function(error, response, body) {
         self.poll()
@@ -30,7 +57,7 @@ function SprinklerPlatform(log, config, api) {
           self.log("ERROR DURING POLLING!")
           self.log(error)
         } else {
-          json = JSON.parse(body)
+          let json = JSON.parse(body)
           self.valves.forEach(function(valve) {
             valve.updateState(json.settings.ps[valve.sid]);
           });
@@ -38,44 +65,19 @@ function SprinklerPlatform(log, config, api) {
         }
       })
     }, self.pollIntervalMs)
-  };
-
-  this.accessories = function (next) {
-    request({url: self.statusUrl}, function(error, response, body) {
-      self.log("response")
-      if (error != null) {
-        self.log("ERROR!")
-        self.log(error)
-        next([]);
-      } else {
-        json = JSON.parse(body)
-        self.log(json.stations.snames)
-        names = json.stations.snames
-        self.valves = config.valves.map(function (valveIndex) {
-          sprinkler = new SprinklerStation(log, config, names[valveIndex], valveIndex)
-          sprinkler.updateState(json.settings.ps[valveIndex]);
-          return(sprinkler)
-        });
-        self.rainDelay = new RainDelay(log, config)
-        self.poll();
-
-        next(self.valves.concat([self.rainDelay]));
-      }
-    });
-  }.bind(this);
+  }
 }
 
+class RainDelay {
+  constructor(log, config) {
+    this.log = log;
+    this.rainDelayHoursOnEnable = config.rainDelayHoursOnEnable || 24;
+    this.config = config;
+    this.name = "Rain Delay";
+    this.currentState = false;
+  }
 
-function RainDelay(log, config) {
-  this.log = log;
-  this.rainDelayHoursOnEnable = config.rainDelayHoursOnEnable || 24;
-  this.config = config;
-  this.name = "Rain Delay";
-  this.currentState = false;
-}
-
-RainDelay.prototype = {
-  updateState: function(rd) {
+  updateState(rd) {
     this.log("rain delay = " + rd);
     this.currentState = rd != 0;
 
@@ -83,41 +85,44 @@ RainDelay.prototype = {
       this.switchService.getCharacteristic(Characteristic.On).
         updateValue(this.currentState);
     }
-  },
-  getServices: function(next) {
+  }
+
+  getServices(next) {
     let informationService = new Service.AccessoryInformation();
     informationService
       .setCharacteristic(Characteristic.Manufacturer, "OpenSprinkler")
       .setCharacteristic(Characteristic.Model, "OpenSprinkler")
       .setCharacteristic(Characteristic.SerialNumber, "opensprinkler-raindelay");
- 
+    
     this.switchService = new Service.Switch(this.name);
 
     this.switchService
       .getCharacteristic(Characteristic.On)
       .on('get', this.getSwitchOnCharacteristic.bind(this))
-        .on('set', this.setSwitchOnCharacteristic.bind(this));
- 
+      .on('set', this.setSwitchOnCharacteristic.bind(this));
+    
     this.informationService = informationService;
     return [informationService, this.switchService];
-  },
-  getSwitchOnCharacteristic: function(next) {
+  }
+  
+  getSwitchOnCharacteristic(next) {
     next(null, this.currentState);
-  },
-  setSwitchOnCharacteristic: function(on, next) {
-    self = this
+  }
+
+  setSwitchOnCharacteristic(on, next) {
+    let self = this
     this.log("setSprinklerOnCharacteristic " + on)
-    baseUrl = "http://" + this.config.host + "/cv?pw=" + this.config.password.md5;
+    let baseUrl = "http://" + this.config.host + "/cv?pw=" + this.config.password.md5;
     if (on) {
       request(
         {url: baseUrl + "&rd=" + self.rainDelayHoursOnEnable},
-        function(error, response, body) {
+        (error, response, body) => {
           if (error != null) {
             self.log("ERROR turning on rain delay")
             self.log(error)
             next(error);
           } else {
-            json = JSON.parse(body)
+            let json = JSON.parse(body)
             if (json.result == 1) {
               next();
             } else {
@@ -130,14 +135,14 @@ RainDelay.prototype = {
       // stopping
       request(
         {url: baseUrl + "&rd=0"},
-        function(error, response, body) {
+        (error, response, body) => {
           if (error != null) {
             self.log("ERROR turning off rain delay")
             self.log(error)
             next(error);
           } else {
             self.log("stopping rain");
-            json = JSON.parse(body)
+            let json = JSON.parse(body)
             if (json.result == 1) {
               next();
             } else {
@@ -150,16 +155,16 @@ RainDelay.prototype = {
   }
 }
 
-function SprinklerStation(log, config, name, sid) {
-  this.log = log;
-  this.config = config;
-  this.sid = sid;
-  this.name = name;
-  this.currentState = false;
-}
+class SprinklerStation {
+  constructor (log, config, name, sid) {
+    this.log = log;
+    this.config = config;
+    this.sid = sid;
+    this.name = name;
+    this.currentState = false;
+  }
 
-SprinklerStation.prototype = {
-  updateState: function (tuple) {
+  updateState(tuple) {
     // tuple is [programId, remaining, startedAt]
     // non-zero programId means sprinkler is running
     this.currentState = tuple[0] != 0
@@ -172,8 +177,9 @@ SprinklerStation.prototype = {
 		  this.valveService.getCharacteristic(Characteristic.InUse)
 			  .updateValue(this.currentState);
     }
-  },
-  getServices: function () {
+  }
+
+  getServices() {
     let informationService = new Service.AccessoryInformation();
     informationService
       .setCharacteristic(Characteristic.Manufacturer, "OpenSprinkler")
@@ -190,17 +196,17 @@ SprinklerStation.prototype = {
  
     this.informationService = informationService;
     return [informationService, this.valveService];
-  },
+  }
 
-  getSprinklerOnCharacteristic: function (next) {
+  getSprinklerOnCharacteristic(next) {
     this.log("getSprinklerOnCharacteristic returning " + this.currentState)
     next(null, this.currentState);
-  },
-   
-  setSprinklerOnCharacteristic: function (on, next) {
-    self = this
+  }
+
+  setSprinklerOnCharacteristic(on, next) {
+    let self = this
     this.log("setSprinklerOnCharacteristic " + on)
-    baseUrl = "http://" + this.config.host + "/cm?pw=" + this.config.password.md5;
+    let baseUrl = "http://" + this.config.host + "/cm?pw=" + this.config.password.md5;
     if (on) {
       request(
         {url: baseUrl + "&en=1&t=" + this.config.secondsOnEnable + "&sid=" + this.sid},
@@ -210,7 +216,7 @@ SprinklerStation.prototype = {
             self.log(error)
             next(error);
           } else {
-            json = JSON.parse(body)
+            let json = JSON.parse(body)
             if (json.result == 1) {
               next();
             } else {
@@ -229,7 +235,7 @@ SprinklerStation.prototype = {
             self.log(error)
             next(error);
           } else {
-            json = JSON.parse(body)
+            let json = JSON.parse(body)
             if (json.result == 1) {
               next();
             } else {
@@ -240,4 +246,5 @@ SprinklerStation.prototype = {
       );
     }
   }
-};
+}
+
