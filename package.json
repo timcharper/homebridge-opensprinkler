@@ -3,6 +3,7 @@
   "version": "0.0.1",
   "description": "Control OpenSprinkler with HomeBridge",
   "license": "ISC",
+  "author": "Tim Harper <timcharper@gmail.com>",
   "keywords": [
     "homebridge-plugin"
   ],
