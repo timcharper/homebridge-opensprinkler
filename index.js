@@ -34,6 +34,7 @@ function SprinklerPlatform(log, config, api) {
           self.valves.forEach(function(valve) {
             valve.updateState(json.settings.ps[valve.sid]);
           });
+          self.rainDelay.updateState(json.settings.rd);
         }
       })
     }, self.pollIntervalMs)
@@ -51,41 +52,126 @@ function SprinklerPlatform(log, config, api) {
         self.log(json.stations.snames)
         names = json.stations.snames
         self.valves = config.valves.map(function (valveIndex) {
-          sprinkler = new mySprinkler(log, config, names[valveIndex], valveIndex)
+          sprinkler = new SprinklerStation(log, config, names[valveIndex], valveIndex)
           sprinkler.updateState(json.settings.ps[valveIndex]);
           return(sprinkler)
         });
+        self.rainDelay = new RainDelay(log, config)
         self.poll();
 
-        next(self.valves)
+        next(self.valves.concat([self.rainDelay]));
       }
     });
   }.bind(this);
 }
 
 
-function mySprinkler(log, config, name, sid) {
+function RainDelay(log, config) {
+  this.log = log;
+  this.rainDelayHoursOnEnable = config.rainDelayHoursOnEnable || 24;
+  this.config = config;
+  this.name = "Rain Delay";
+  this.currentState = false;
+}
+
+RainDelay.prototype = {
+  updateState: function(rd) {
+    this.log("rain delay = " + rd);
+    this.currentState = rd != 0;
+
+    if (this.switchService) {
+      this.switchService.getCharacteristic(Characteristic.On).
+        updateValue(this.currentState);
+    }
+  },
+  getServices: function(next) {
+    let informationService = new Service.AccessoryInformation();
+    informationService
+      .setCharacteristic(Characteristic.Manufacturer, "OpenSprinkler")
+      .setCharacteristic(Characteristic.Model, "OpenSprinkler")
+      .setCharacteristic(Characteristic.SerialNumber, "opensprinkler-raindelay");
+ 
+    this.switchService = new Service.Switch(this.name);
+
+    this.switchService
+      .getCharacteristic(Characteristic.On)
+      .on('get', this.getSwitchOnCharacteristic.bind(this))
+        .on('set', this.setSwitchOnCharacteristic.bind(this));
+ 
+    this.informationService = informationService;
+    return [informationService, this.switchService];
+  },
+  getSwitchOnCharacteristic: function(next) {
+    next(null, this.currentState);
+  },
+  setSwitchOnCharacteristic: function(on, next) {
+    self = this
+    this.log("setSprinklerOnCharacteristic " + on)
+    baseUrl = "http://" + this.config.host + "/cv?pw=" + this.config.password.md5;
+    if (on) {
+      request(
+        {url: baseUrl + "&rd=" + self.rainDelayHoursOnEnable},
+        function(error, response, body) {
+          if (error != null) {
+            self.log("ERROR turning on rain delay")
+            self.log(error)
+            next(error);
+          } else {
+            json = JSON.parse(body)
+            if (json.result == 1) {
+              next();
+            } else {
+              next("result was " + body);
+            }
+          }
+        }
+      );
+    } else {
+      // stopping
+      request(
+        {url: baseUrl + "&rd=0"},
+        function(error, response, body) {
+          if (error != null) {
+            self.log("ERROR turning off rain delay")
+            self.log(error)
+            next(error);
+          } else {
+            self.log("stopping rain");
+            json = JSON.parse(body)
+            if (json.result == 1) {
+              next();
+            } else {
+              next("result was " + body);
+            }
+          }
+        }
+      );
+    }
+  }
+}
+
+function SprinklerStation(log, config, name, sid) {
   this.log = log;
   this.config = config;
   this.sid = sid;
   this.name = name;
   this.currentState = false;
-  this.valveService = new Service.Valve(this.name);
-  this.valveService.getCharacteristic(Characteristic.ValveType).updateValue(1);
 }
 
-mySprinkler.prototype = {
+SprinklerStation.prototype = {
   updateState: function (tuple) {
     // tuple is [programId, remaining, startedAt]
     // non-zero programId means sprinkler is running
     this.currentState = tuple[0] != 0
     this.log("updateState " + this.currentState);
 
-    this.valveService.getCharacteristic(Characteristic.Active)
-			.updateValue(this.currentState);
-		   
-		this.valveService.getCharacteristic(Characteristic.InUse)
-			.updateValue(this.currentState);
+    if (this.valveService) {
+      this.valveService.getCharacteristic(Characteristic.Active)
+			  .updateValue(this.currentState);
+		
+		  this.valveService.getCharacteristic(Characteristic.InUse)
+			  .updateValue(this.currentState);
+    }
   },
   getServices: function () {
     let informationService = new Service.AccessoryInformation();
@@ -94,6 +180,8 @@ mySprinkler.prototype = {
       .setCharacteristic(Characteristic.Model, "OpenSprinkler")
       .setCharacteristic(Characteristic.SerialNumber, "opensprinkler-" + this.sid);
  
+    this.valveService = new Service.Valve(this.name);
+    this.valveService.getCharacteristic(Characteristic.ValveType).updateValue(1);
 
     this.valveService
       .getCharacteristic(Characteristic.Active)
@@ -106,19 +194,6 @@ mySprinkler.prototype = {
 
   getSprinklerOnCharacteristic: function (next) {
     this.log("getSprinklerOnCharacteristic returning " + this.currentState)
-    const me = this;
-    // request({
-    //     url: me.getUrl,
-    //     method: 'GET',
-    // }, 
-    // function (error, response, body) {
-    //   if (error) {
-    //     me.log('STATUS: ' + response.statusCode);
-    //     me.log(error.message);
-    //     return next(error);
-    //   }
-    //   return next(null, body.currentState);
-    // });
     next(null, this.currentState);
   },
    
@@ -164,7 +239,5 @@ mySprinkler.prototype = {
         }
       );
     }
-    // curl 'http://sprinkler.lan/cm?sid=0&en=1&t=60&pw=a6d82bced638de3def1e9bbb4983225c' -H 'Host: sprinkler.lan' -H 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10.13; rv:60.0) Gecko/20100101 Firefox/60.0' -H 'Accept: application/json, text/javascript, */*; q=0.01' -H 'Accept-Language: en-US,en;q=0.5' --compressed -H 'Referer: http://sprinkler.lan/' -H 'X-Requested-With: XMLHttpRequest' -H 'Connection: keep-alive'
-    // curl 'http://sprinkler.lan/cm?sid=0&en=0&pw=a6d82bced638de3def1e9bbb4983225c' -H 'Host: sprinkler.lan' -H 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10.13; rv:60.0) Gecko/20100101 Firefox/60.0' -H 'Accept: text/plain, */*; q=0.01' -H 'Accept-Language: en-US,en;q=0.5' --compressed -H 'Referer: http://sprinkler.lan/' -H 'X-Requested-With: XMLHttpRequest' -H 'Connection: keep-alive'
   }
 };
