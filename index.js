@@ -11,53 +11,115 @@ module.exports = function (homebridge) {
   homebridge.registerPlatform("homebridge-opensprinkler", "OpenSprinkler", SprinklerPlatform);
 };
 
+class OpenSprinklerApi {
+  constructor(log, config) {
+    this.log = log
+    this.baseUrl = "http://" + config.host
+    this.passwordMd5 = config.password.md5
+    this.statusUrl = this.urlFor("/ja")
+  }
+
+  urlFor(path, params) {
+    let url = this.baseUrl + path + "?pw=" + this.passwordMd5
+    if (params)
+      url = url + "&" + params
+    return url
+  }
+
+  getStatus(callback) {
+    let self = this
+    request({url: this.statusUrl}, (error, response, body) => {
+      if (error != null) {
+        self.log("ERROR getting status!")
+        self.log(error)
+        callback(error)
+      } else {
+        let json = JSON.parse(body)
+        callback(null, json)
+      }
+    })
+  }
+
+  setRainDelay(rd, callback) {
+    request({url: this.urlFor("/cv", "rd=" + rd)}, (error, response, body) => {
+        if (error != null) {
+          self.log("ERROR setting rain delay")
+          self.log(error)
+          callback(error);
+        } else {
+          let json = JSON.parse(body)
+          if (json.result == 1) {
+            callback();
+          } else {
+            callback("result was " + body);
+          }
+        }
+      }
+    )
+  }
+
+  setValve(sid, enable, time, callback) {
+    let params = "sid=" + sid
+    if (enable)
+      params = params + "&en=1&t=" + time
+    else
+      params = params + "&en=0"
+
+    request({url: this.urlFor("/cm", params)}, (error, response, body) => {
+      if (error != null) {
+        self.log("ERROR turning valve " + self.name + " on!")
+        self.log(error)
+        callback(error);
+      } else {
+        let json = JSON.parse(body)
+        if (json.result == 1) {
+          callback();
+        } else {
+          callback("result was " + body);
+        }
+      }
+    })
+  }
+}
+
 class SprinklerPlatform {
   constructor(log, config, api) {
     let self = this
-    console.log("its a me")
     this.log = log;
     this.name = "Test valve"
     this.config = config;
     this.api = api;
-    this.statusUrl = "http://" + config.host + "/ja?pw=" + config.password.md5;
+    this.openSprinklerApi = new OpenSprinklerApi(log, config)
     this.pollIntervalMs = config.pollIntervalMs || 5000;
 
     this.accessories = function (next) {
-      request({url: self.statusUrl}, function(error, response, body) {
-        self.log("response")
+      this.openSprinklerApi.getStatus((error, json) => {
         if (error != null) {
-          self.log("ERROR!")
-          self.log(error)
           next([]);
         } else {
-          let json = JSON.parse(body)
           let names = json.stations.snames
           self.log(names)
           self.valves = config.valves.map(function (valveIndex) {
-            let sprinkler = new SprinklerStation(log, config, names[valveIndex], valveIndex)
+            let sprinkler = new SprinklerStation(log, config, names[valveIndex], valveIndex, self.openSprinklerApi)
             sprinkler.updateState(json.settings.ps[valveIndex]);
             return(sprinkler)
           });
-          self.rainDelay = new RainDelay(log, config)
+          self.rainDelay = new RainDelay(log, config, self.openSprinklerApi)
           self.poll();
 
           next(self.valves.concat([self.rainDelay]));
         }
-      });
+      })
     }
   }
 
   poll() {
     let self = this
     setTimeout(function() {
-      request({url: self.statusUrl}, function(error, response, body) {
+      self.openSprinklerApi.getStatus((error, json) => {
         self.poll()
         self.log("poll response")
-        if (error != null) {
-          self.log("ERROR DURING POLLING!")
-          self.log(error)
-        } else {
-          let json = JSON.parse(body)
+        if (error == null) {
           self.valves.forEach(function(valve) {
             valve.updateState(json.settings.ps[valve.sid]);
           });
@@ -69,10 +131,10 @@ class SprinklerPlatform {
 }
 
 class RainDelay {
-  constructor(log, config) {
+  constructor(log, config, openSprinklerApi) {
     this.log = log;
+    this.openSprinklerApi = openSprinklerApi
     this.rainDelayHoursOnEnable = config.rainDelayHoursOnEnable || 24;
-    this.config = config;
     this.name = "Rain Delay";
     this.currentState = false;
   }
@@ -112,52 +174,17 @@ class RainDelay {
   setSwitchOnCharacteristic(on, next) {
     let self = this
     this.log("setSprinklerOnCharacteristic " + on)
-    let baseUrl = "http://" + this.config.host + "/cv?pw=" + this.config.password.md5;
-    if (on) {
-      request(
-        {url: baseUrl + "&rd=" + self.rainDelayHoursOnEnable},
-        (error, response, body) => {
-          if (error != null) {
-            self.log("ERROR turning on rain delay")
-            self.log(error)
-            next(error);
-          } else {
-            let json = JSON.parse(body)
-            if (json.result == 1) {
-              next();
-            } else {
-              next("result was " + body);
-            }
-          }
-        }
-      );
-    } else {
-      // stopping
-      request(
-        {url: baseUrl + "&rd=0"},
-        (error, response, body) => {
-          if (error != null) {
-            self.log("ERROR turning off rain delay")
-            self.log(error)
-            next(error);
-          } else {
-            self.log("stopping rain");
-            let json = JSON.parse(body)
-            if (json.result == 1) {
-              next();
-            } else {
-              next("result was " + body);
-            }
-          }
-        }
-      );
-    }
+    if (on)
+      this.openSprinklerApi.setRainDelay(self.rainDelayHoursOnEnable, next)
+    else
+      this.openSprinklerApi.setRainDelay(0, next)
   }
 }
 
 class SprinklerStation {
-  constructor (log, config, name, sid) {
+  constructor (log, config, name, sid, openSprinklerApi) {
     this.log = log;
+    this.openSprinklerApi = openSprinklerApi
     this.config = config;
     this.sid = sid;
     this.name = name;
@@ -204,47 +231,11 @@ class SprinklerStation {
   }
 
   setSprinklerOnCharacteristic(on, next) {
-    let self = this
     this.log("setSprinklerOnCharacteristic " + on)
-    let baseUrl = "http://" + this.config.host + "/cm?pw=" + this.config.password.md5;
-    if (on) {
-      request(
-        {url: baseUrl + "&en=1&t=" + this.config.secondsOnEnable + "&sid=" + this.sid},
-        function(error, response, body) {
-          if (error != null) {
-            self.log("ERROR turning valve " + self.name + " on!")
-            self.log(error)
-            next(error);
-          } else {
-            let json = JSON.parse(body)
-            if (json.result == 1) {
-              next();
-            } else {
-              next("result was " + body);
-            }
-          }
-        }
-      );
-    } else {
-      // stopping
-      request(
-        {url: baseUrl + "&en=0&sid=" + this.sid},
-        function(error, response, body) {
-          if (error != null) {
-            self.log("ERROR turning valve " + self.name + " off!")
-            self.log(error)
-            next(error);
-          } else {
-            let json = JSON.parse(body)
-            if (json.result == 1) {
-              next();
-            } else {
-              next("result was " + body);
-            }
-          }
-        }
-      );
-    }
+    if (on)
+      this.openSprinklerApi.setValve(this.sid, true, this.config.secondsOnEnable, next)
+    else
+      this.openSprinklerApi.setValve(this.sid, false, 0, next)
   }
 }
 
