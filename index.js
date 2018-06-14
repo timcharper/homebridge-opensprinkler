@@ -193,6 +193,7 @@ class SprinklerStation {
     this.log = log;
     this.openSprinklerApi = openSprinklerApi
     this.config = config;
+    this.setDuration = config.defaultDuration
     this.sid = sid;
     this.name = name;
     this.currentlyActive = false;
@@ -210,11 +211,15 @@ class SprinklerStation {
 		
 		  this.valveService.getCharacteristic(Characteristic.InUse)
 			  .updateValue(this.currentlyInUse);
+
+      this.valveService.getCharacteristic(Characteristic.RemainingDuration)
+				.updateValue(remaining);
     }
   }
 
   getServices() {
     let informationService = new Service.AccessoryInformation();
+    let self = this
     informationService
       .setCharacteristic(Characteristic.Manufacturer, "OpenSprinkler")
       .setCharacteristic(Characteristic.Model, "OpenSprinkler")
@@ -231,6 +236,18 @@ class SprinklerStation {
     this.valveService
       .getCharacteristic(Characteristic.InUse)
       .on('get', this.getSprinklerInUseCharacteristic.bind(this))
+
+    this.valveService.addCharacteristic(Characteristic.SetDuration)
+      .on('get', (next) => {
+        next(null, this.setDuration)
+      })
+			.on('set', (duration, next) => {
+        self.setDuration = duration
+        console.log("SetDuration", duration)
+        next()
+			})
+
+    this.valveService.addCharacteristic(Characteristic.RemainingDuration)
  
     this.informationService = informationService;
     return [informationService, this.valveService];
@@ -244,7 +261,7 @@ class SprinklerStation {
   setSprinklerActiveCharacteristic(on, next) {
     this.log("setSprinklerActiveCharacteristic " + on)
     if (on)
-      this.openSprinklerApi.setValve(this.sid, true, this.config.secondsOnEnable, next)
+      this.openSprinklerApi.setValve(this.sid, true, this.setDuration, next)
     else
       this.openSprinklerApi.setValve(this.sid, false, 0, next)
   }
