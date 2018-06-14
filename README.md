@@ -20,6 +20,22 @@ Simple OpenSprinkler / Homebridge integration.
 - Persisting Home-configured station-specific default durations after restart
 - Does not support multiple OpenSprinkler systems
 
+## Installation
+
+Installing:
+
+```
+npm install -g homebridge-opensprinkler
+```
+
+Updating:
+
+```
+npm update -g homebridge-tplink-smarthome
+```
+
+Add the section below to your homebridge `platforms` section.
+
 ## Configuration
 
 - `host`: The IP or DNS name of the OpenSprinkler controller
