@@ -1,6 +1,7 @@
 var Accessory, Service, Characteristic, UUIDGen;
 const request = require('request');
 const url = require('url');
+const crypto = require('crypto');
 
 module.exports = function (homebridge) {
   Accessory = homebridge.platformAccessory;
@@ -15,7 +16,10 @@ class OpenSprinklerApi {
   constructor(log, config) {
     this.log = log
     this.baseUrl = "http://" + config.host
-    this.passwordMd5 = config.password.md5
+    if (config.password.md5)
+      this.passwordMd5 = config.password.md5
+    else
+      this.passwordMd5 = crypto.createHash('md5').update(config.password.plain).digest("hex")
     this.statusUrl = this.urlFor("/ja")
   }
 
@@ -85,12 +89,21 @@ class OpenSprinklerApi {
 class SprinklerPlatform {
   constructor(log, config, api) {
     let self = this
+    config.pollIntervalMs = config.pollIntervalMs || 5000
+    config.defaultDurationSecs = config.defaultDurationSecs || 600
+    config.enabledStationIds = config.enabledStationIds || [0,1,2,3]
+    if (!config.host) {
+      throw("Host must be specified in the configuration!")
+    }
+    if (!config.password) {
+      throw("Password must be specified in the configuration!")
+    }
     this.log = log;
     this.name = "Test valve"
     this.config = config;
     this.api = api;
     this.openSprinklerApi = new OpenSprinklerApi(log, config)
-    this.pollIntervalMs = config.pollIntervalMs || 5000;
+    this.pollIntervalMs = config.pollIntervalMs;
 
     this.accessories = function (next) {
       this.openSprinklerApi.getStatus((error, json) => {
@@ -98,15 +111,15 @@ class SprinklerPlatform {
           next([]);
         } else {
           let names = json.stations.snames
+          self.log("Station names:")
           self.log(names)
-          self.valves = config.valves.map(function (valveIndex) {
+          self.valves = config.enabledStationIds.map(function (valveIndex) {
             let sprinkler = new SprinklerStation(log, config, names[valveIndex], valveIndex, self.openSprinklerApi)
             sprinkler.updateState(json.settings.ps[valveIndex]);
             return(sprinkler)
           });
-          self.rainDelay = new RainDelay(log, config, self.openSprinklerApi)
+          self.rainDelay = new RainDelay(log, config, self.openSprinklerApi, json.settings.wto.d)
           self.poll();
-
           next(self.valves.concat([self.rainDelay]));
         }
       })
@@ -118,7 +131,6 @@ class SprinklerPlatform {
     setTimeout(function() {
       self.openSprinklerApi.getStatus((error, json) => {
         self.poll()
-        self.log("poll response")
         if (error == null) {
           self.valves.forEach(function(valve) {
             // tuple is [programId, remaining, startedAt]
@@ -130,7 +142,7 @@ class SprinklerPlatform {
                               tuple[2],
                               json.status.sn[valve.sid]);
           });
-          self.rainDelay.updateState(json.settings.rd);
+          self.rainDelay.updateState(json.settings.rd, json.settings.wto.d);
         }
       })
     }, self.pollIntervalMs)
@@ -138,16 +150,17 @@ class SprinklerPlatform {
 }
 
 class RainDelay {
-  constructor(log, config, openSprinklerApi) {
+  constructor(log, config, openSprinklerApi, rainDelayHoursSetting) {
     this.log = log;
     this.openSprinklerApi = openSprinklerApi
-    this.rainDelayHoursOnEnable = config.rainDelayHoursOnEnable || 24;
+    this.rainDelayHoursSetting = rainDelayHoursSetting;
     this.name = "Rain Delay";
     this.currentState = false;
   }
 
-  updateState(rd) {
-    this.log("rain delay = " + rd);
+  updateState(rd, rainDelayHoursSetting) {
+    this.rainDelayHoursSetting = rainDelayHoursSetting
+    // this.log("rain delay = " + rd);
     this.currentState = rd != 0;
 
     if (this.switchService) {
@@ -182,7 +195,7 @@ class RainDelay {
     let self = this
     this.log("setSprinklerOnCharacteristic " + on)
     if (on)
-      this.openSprinklerApi.setRainDelay(self.rainDelayHoursOnEnable, next)
+      this.openSprinklerApi.setRainDelay(self.rainDelayHoursSetting, next)
     else
       this.openSprinklerApi.setRainDelay(0, next)
   }
@@ -193,7 +206,7 @@ class SprinklerStation {
     this.log = log;
     this.openSprinklerApi = openSprinklerApi
     this.config = config;
-    this.setDuration = config.defaultDuration
+    this.setDuration = config.defaultDurationSecs
     this.sid = sid;
     this.name = name;
     this.currentlyActive = false;
@@ -203,7 +216,7 @@ class SprinklerStation {
   updateState(currentTime, programId, remaining, startedAt, inUse) {
     this.currentlyInUse = inUse != 0 // inUse means it is spraying water
     this.currentlyActive = programId != 0 // active means it is associated with a program, but may not currently be active
-    this.log("inUse: " + this.currentlyInUse + " active: " + this.currentlyActive);
+    // this.log("inUse: " + this.currentlyInUse + " active: " + this.currentlyActive);
 
     if (this.valveService) {
       this.valveService.getCharacteristic(Characteristic.Active)
