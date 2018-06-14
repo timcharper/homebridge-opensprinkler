@@ -121,7 +121,14 @@ class SprinklerPlatform {
         self.log("poll response")
         if (error == null) {
           self.valves.forEach(function(valve) {
-            valve.updateState(json.settings.ps[valve.sid]);
+            // tuple is [programId, remaining, startedAt]
+            // non-zero programId means sprinkler is running
+            let tuple = json.settings.ps[valve.sid]
+            valve.updateState(json.settings.devt,
+                              tuple[0],
+                              tuple[1],
+                              tuple[2],
+                              json.status.sn[valve.sid]);
           });
           self.rainDelay.updateState(json.settings.rd);
         }
@@ -188,21 +195,21 @@ class SprinklerStation {
     this.config = config;
     this.sid = sid;
     this.name = name;
-    this.currentState = false;
+    this.currentlyActive = false;
+    this.currentlyInUse = false;
   }
 
-  updateState(tuple) {
-    // tuple is [programId, remaining, startedAt]
-    // non-zero programId means sprinkler is running
-    this.currentState = tuple[0] != 0
-    this.log("updateState " + this.currentState);
+  updateState(currentTime, programId, remaining, startedAt, inUse) {
+    this.currentlyInUse = inUse != 0 // inUse means it is spraying water
+    this.currentlyActive = programId != 0 // active means it is associated with a program, but may not currently be active
+    this.log("inUse: " + this.currentlyInUse + " active: " + this.currentlyActive);
 
     if (this.valveService) {
       this.valveService.getCharacteristic(Characteristic.Active)
-			  .updateValue(this.currentState);
+			  .updateValue(this.currentlyActive);
 		
 		  this.valveService.getCharacteristic(Characteristic.InUse)
-			  .updateValue(this.currentState);
+			  .updateValue(this.currentlyInUse);
     }
   }
 
@@ -218,24 +225,33 @@ class SprinklerStation {
 
     this.valveService
       .getCharacteristic(Characteristic.Active)
-      .on('get', this.getSprinklerOnCharacteristic.bind(this))
-        .on('set', this.setSprinklerOnCharacteristic.bind(this));
+      .on('get', this.getSprinklerActiveCharacteristic.bind(this))
+      .on('set', this.setSprinklerActiveCharacteristic.bind(this));
+
+    this.valveService
+      .getCharacteristic(Characteristic.InUse)
+      .on('get', this.getSprinklerInUseCharacteristic.bind(this))
  
     this.informationService = informationService;
     return [informationService, this.valveService];
   }
 
-  getSprinklerOnCharacteristic(next) {
-    this.log("getSprinklerOnCharacteristic returning " + this.currentState)
-    next(null, this.currentState);
+  getSprinklerActiveCharacteristic(next) {
+    this.log("getSprinklerActiveCharacteristic returning " + this.currentlyActive)
+    next(null, this.currentlyActive);
   }
 
-  setSprinklerOnCharacteristic(on, next) {
-    this.log("setSprinklerOnCharacteristic " + on)
+  setSprinklerActiveCharacteristic(on, next) {
+    this.log("setSprinklerActiveCharacteristic " + on)
     if (on)
       this.openSprinklerApi.setValve(this.sid, true, this.config.secondsOnEnable, next)
     else
       this.openSprinklerApi.setValve(this.sid, false, 0, next)
+  }
+
+  getSprinklerInUseCharacteristic(next) {
+    this.log("getSprinklerInUseCharacteristic returning " + this.currentlyInUse)
+    next(null, this.currentlyInUse);
   }
 }
 
