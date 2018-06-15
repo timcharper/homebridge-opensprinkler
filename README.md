@@ -22,7 +22,13 @@ Simple OpenSprinkler / Homebridge integration.
 
 ## Installation
 
-Installing:
+First, you need [Homebridge](https://github.com/nfarina/homebridge) installed and configured:
+
+```
+npm install -g homebridge
+```
+
+Install this plug-in:
 
 ```
 npm install -g homebridge-opensprinkler
