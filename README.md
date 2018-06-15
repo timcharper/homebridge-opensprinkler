@@ -1,5 +1,7 @@
 # OpenSprinkler
 
+"Hey Siri, turn off my sprinklers"
+
 ## Overview
 
 Simple OpenSprinkler / Homebridge integration.
