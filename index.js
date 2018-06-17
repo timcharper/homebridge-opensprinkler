@@ -1,5 +1,5 @@
 var Accessory, Service, Characteristic, UUIDGen;
-const request = require('request');
+const request = require("request-promise-native")
 const url = require('url');
 const crypto = require('crypto');
 
@@ -11,6 +11,30 @@ module.exports = function (homebridge) {
 
   homebridge.registerPlatform("homebridge-opensprinkler", "OpenSprinkler", SprinklerPlatform);
 };
+
+
+function withTimeoutCancellation(promise, duration) {
+  return new Promise((success, reject) => {
+    let timer = setTimeout(() => {
+      console.log("too slow")
+      reject("too slow")
+    }, duration)
+    promise.finally(() => clearTimeout(timer))
+    promise.then(success,reject)
+  })
+}
+
+function promiseSetter(log, fn) {
+  return (value, next) => {
+    fn(value).then(
+      (result) => next(),
+      (failure) => {
+        log("failure " + failure)
+        next(failure)
+      }
+    )
+  }
+}
 
 class OpenSprinklerApi {
   constructor(log, config) {
@@ -30,59 +54,47 @@ class OpenSprinklerApi {
     return url
   }
 
-  getStatus(callback) {
-    let self = this
-    request({url: this.statusUrl}, (error, response, body) => {
-      if (error != null) {
-        self.log("ERROR getting status!")
-        self.log(error)
-        callback(error)
-      } else {
-        let json = JSON.parse(body)
-        callback(null, json)
-      }
-    })
-  }
-
-  setRainDelay(rd, callback) {
-    request({url: this.urlFor("/cv", "rd=" + rd)}, (error, response, body) => {
-        if (error != null) {
-          self.log("ERROR setting rain delay")
-          self.log(error)
-          callback(error);
-        } else {
+  _withResultHandling(promise, context) {
+    return promise.then(
+      (body) => {
           let json = JSON.parse(body)
           if (json.result == 1) {
-            callback();
+            return true
           } else {
-            callback("result was " + body);
+            return Promise.reject("result was " + body);
           }
-        }
+      },
+      (error) => {
+        this.log("ERROR " + context)
+        this.log(error)
+        return Promise.reject(error)
       }
     )
   }
 
-  setValve(sid, enable, time, callback) {
+  getStatus() {
+    try {
+      return request({url: this.statusUrl}).then(
+        JSON.parse,
+        (error) => this.log(error))
+    }
+    catch (error) {
+      return Promise.reject(error)
+    }
+  }
+
+  setRainDelay(rd) {
+    return this._withResultHandling(request({url: this.urlFor("/cv", "rd=" + rd)}), "setRainDelay")
+  }
+
+  setValve(sid, enable, time) {
     let params = "sid=" + sid
     if (enable)
       params = params + "&en=1&t=" + time
     else
       params = params + "&en=0"
 
-    request({url: this.urlFor("/cm", params)}, (error, response, body) => {
-      if (error != null) {
-        self.log("ERROR turning valve " + self.name + " on!")
-        self.log(error)
-        callback(error);
-      } else {
-        let json = JSON.parse(body)
-        if (json.result == 1) {
-          callback();
-        } else {
-          callback("result was " + body);
-        }
-      }
-    })
+    return this._withResultHandling(request({url: this.urlFor("/cm", params)}), "setValve")
   }
 }
 
@@ -106,10 +118,8 @@ class SprinklerPlatform {
     this.pollIntervalMs = config.pollIntervalMs;
 
     this.accessories = function (next) {
-      this.openSprinklerApi.getStatus((error, json) => {
-        if (error != null) {
-          next([]);
-        } else {
+      this.openSprinklerApi.getStatus().then(
+        (json) => {
           let names = json.stations.snames
           self.log("Station names:")
           self.log(names)
@@ -121,31 +131,41 @@ class SprinklerPlatform {
           self.rainDelay = new RainDelay(log, config, self.openSprinklerApi, json.settings.wto.d)
           self.poll();
           next(self.valves.concat([self.rainDelay]));
+        },
+        (error) => {
+          log(error)
+          next([])
         }
-      })
+      )
     }
   }
 
   poll() {
-    let self = this
-    setTimeout(function() {
-      self.openSprinklerApi.getStatus((error, json) => {
-        self.poll()
-        if (error == null) {
-          self.valves.forEach(function(valve) {
-            // tuple is [programId, remaining, startedAt]
-            // non-zero programId means sprinkler is running
-            let tuple = json.settings.ps[valve.sid]
-            valve.updateState(json.settings.devt,
-                              tuple[0],
-                              tuple[1],
-                              tuple[2],
-                              json.status.sn[valve.sid]);
-          });
-          self.rainDelay.updateState(json.settings.rd, json.settings.wto.d);
-        }
-      })
-    }, self.pollIntervalMs)
+    console.log("polling...")
+    let done = withTimeoutCancellation(this.openSprinklerApi.getStatus(), this.pollIntervalMs * 5)
+    done.then(
+      (json) => {
+        this.valves.forEach((valve) => {
+          // tuple is [programId, remaining, startedAt]
+          // non-zero programId means sprinkler is running
+          let tuple = json.settings.ps[valve.sid]
+          valve.updateState(json.settings.devt,
+                            tuple[0],
+                            tuple[1],
+                            tuple[2],
+                            json.status.sn[valve.sid]);
+        });
+        this.rainDelay.updateState(json.settings.rd, json.settings.wto.d);
+      },
+      (err) => {
+        this.log("error while polling:", err)
+      }
+    )
+
+    done.finally(() => {
+      console.log("queueing up next poll...")
+      setTimeout(() => this.poll(), this.pollIntervalMs)
+    })
   }
 }
 
@@ -169,7 +189,7 @@ class RainDelay {
     }
   }
 
-  getServices(next) {
+  getServices() {
     let informationService = new Service.AccessoryInformation();
     informationService
       .setCharacteristic(Characteristic.Manufacturer, "OpenSprinkler")
@@ -181,7 +201,7 @@ class RainDelay {
     this.switchService
       .getCharacteristic(Characteristic.On)
       .on('get', this.getSwitchOnCharacteristic.bind(this))
-      .on('set', this.setSwitchOnCharacteristic.bind(this));
+      .on('set', promiseSetter(this.log, this.setSwitchOnCharacteristic.bind(this)));
     
     this.informationService = informationService;
     return [informationService, this.switchService];
@@ -191,13 +211,13 @@ class RainDelay {
     next(null, this.currentState);
   }
 
-  setSwitchOnCharacteristic(on, next) {
+  setSwitchOnCharacteristic(on) {
     let self = this
     this.log("setSprinklerOnCharacteristic " + on)
     if (on)
-      this.openSprinklerApi.setRainDelay(self.rainDelayHoursSetting, next)
+      return this.openSprinklerApi.setRainDelay(self.rainDelayHoursSetting)
     else
-      this.openSprinklerApi.setRainDelay(0, next)
+      return this.openSprinklerApi.setRainDelay(0)
   }
 }
 
@@ -244,7 +264,7 @@ class SprinklerStation {
     this.valveService
       .getCharacteristic(Characteristic.Active)
       .on('get', this.getSprinklerActiveCharacteristic.bind(this))
-      .on('set', this.setSprinklerActiveCharacteristic.bind(this));
+      .on('set', promiseSetter(this.log, this.setSprinklerActiveCharacteristic.bind(this)))
 
     this.valveService
       .getCharacteristic(Characteristic.InUse)
@@ -271,12 +291,12 @@ class SprinklerStation {
     next(null, this.currentlyActive);
   }
 
-  setSprinklerActiveCharacteristic(on, next) {
+  setSprinklerActiveCharacteristic(on) {
     this.log("setSprinklerActiveCharacteristic " + on)
     if (on)
-      this.openSprinklerApi.setValve(this.sid, true, this.setDuration, next)
+      return this.openSprinklerApi.setValve(this.sid, true, this.setDuration)
     else
-      this.openSprinklerApi.setValve(this.sid, false, 0, next)
+      return this.openSprinklerApi.setValve(this.sid, false, 0)
   }
 
   getSprinklerInUseCharacteristic(next) {
