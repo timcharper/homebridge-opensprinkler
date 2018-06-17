@@ -3,6 +3,8 @@ const request = require("request-promise-native")
 const url = require('url');
 const crypto = require('crypto');
 
+const REQUEST_TIMEOUT = 10000
+
 module.exports = function (homebridge) {
   Accessory = homebridge.platformAccessory;
   Service = homebridge.hap.Service;
@@ -74,7 +76,7 @@ class OpenSprinklerApi {
 
   getStatus() {
     try {
-      return request({url: this.statusUrl}).then(
+      return request({url: this.statusUrl, timeout: REQUEST_TIMEOUT}).then(
         JSON.parse,
         (error) => this.log(error))
     }
@@ -84,7 +86,7 @@ class OpenSprinklerApi {
   }
 
   setRainDelay(rd) {
-    return this._withResultHandling(request({url: this.urlFor("/cv", "rd=" + rd)}), "setRainDelay")
+    return this._withResultHandling(request({url: this.urlFor("/cv", "rd=" + rd), timeout: REQUEST_TIMEOUT}), "setRainDelay")
   }
 
   setValve(sid, enable, time) {
@@ -94,7 +96,7 @@ class OpenSprinklerApi {
     else
       params = params + "&en=0"
 
-    return this._withResultHandling(request({url: this.urlFor("/cm", params)}), "setValve")
+    return this._withResultHandling(request({url: this.urlFor("/cm", params), timeout: REQUEST_TIMEOUT}), "setValve")
   }
 }
 
