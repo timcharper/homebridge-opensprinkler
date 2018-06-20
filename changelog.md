@@ -1,3 +1,8 @@
+# v0.1.2
+
+- Specify NodeJS version dependency. Fixes: (v0.1.1 Promise Error)[https://github.com/timcharper/homebridge-opensprinkler/issues/2]
+- Also, Specify Homebridge dependency as 0.4.0 or later.
+
 # v0.1.1
 
 - Fixed issue: (Polling stops working after some time)[https://github.com/timcharper/homebridge-opensprinkler/issues/1].
