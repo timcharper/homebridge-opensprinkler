@@ -1,3 +1,7 @@
+# v0.1.1
+
+- Fixed issue: (Polling stops working after some time)[https://github.com/timcharper/homebridge-opensprinkler/issues/1].
+
 # v0.1.0
 
 - Time remaining now works, plus the ability to set the default duration per station.
