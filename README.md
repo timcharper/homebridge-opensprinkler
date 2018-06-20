@@ -45,7 +45,7 @@ npm install -g homebridge-opensprinkler
 Updating:
 
 ```
-npm update -g homebridge-tplink-smarthome
+npm update -g homebridge-opensprinkler
 ```
 
 Add the section below to your homebridge `platforms` section.
