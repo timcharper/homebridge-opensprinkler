@@ -24,7 +24,13 @@ Simple OpenSprinkler / Homebridge integration.
 
 ## Installation
 
-First, you need [Homebridge](https://github.com/nfarina/homebridge) installed and configured:
+You must have NodeJS `v8.1.4` or later installed as `homebridge-opensprinkler` depends on JavaScript features introduced at that point. Check your node version:
+
+```
+node --version
+```
+
+You need [Homebridge](https://github.com/nfarina/homebridge) installed and configured. This plugin was developed against Homebridge `0.4.43`.
 
 ```
 npm install -g homebridge
