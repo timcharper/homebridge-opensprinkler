@@ -15,7 +15,7 @@
     "url": "http://github.com/timcharper/homebridge-opensprinkler/issues"
   },
   "engines": {
-    "node": ">=0.12.0",
+    "node": ">=8.1.4",
     "homebridge": ">=0.2.0"
   },
   "dependencies": {
