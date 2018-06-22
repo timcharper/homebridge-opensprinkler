@@ -1,3 +1,8 @@
+# v0.2.0
+
+- Clean up logging substantially; no more console.log usage. Polling messages go to debug log.
+- If no poll update received for 3x poll duration, show devices as unresponsive when Home queries initial state
+
 # v0.1.2
 
 - Specify NodeJS version dependency. Fixes: (v0.1.1 Promise Error)[https://github.com/timcharper/homebridge-opensprinkler/issues/2]
