@@ -3,6 +3,9 @@ const request = require("request-promise-native")
 const OpenSprinklerApiModule = require("./lib/opensprinkler_api.js")
 const DevicesModule = require("./lib/devices.js")
 const SystemModule = require("./lib/system.js")
+const PromiseFinally = require('promise.prototype.finally')
+
+PromiseFinally.shim()
 
 module.exports = function (homebridge) {
   Accessory = homebridge.platformAccessory;
