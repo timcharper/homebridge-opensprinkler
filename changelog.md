@@ -1,3 +1,7 @@
+# v0.2.1
+
+- Bring in promise finally shim (fix [#5](https://github.com/timcharper/homebridge-opensprinkler/issues/5))
+
 # v0.2.0
 
 - Clean up logging substantially; no more console.log usage. Polling messages go to debug log.
